@@ -5,8 +5,25 @@ local Tab1 = Window:AddTab("Spin")
 local Tab2 = Window:AddTab("Game")
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local SpinPrizeEvent = ReplicatedStorage.Remotes:WaitForChild("SpinPrizeEvent") or ReplicatedStorage:WaitForChild("SpinPrizeEvent")
-local DigEvent = ReplicatedStorage.Remotes:WaitForChild("DigEvent") or ReplicatedStorage:WaitForChild("DigEvent")
+
+-- WaitForChild без таймаута никогда не вернёт nil, поэтому конструкция
+-- "a:WaitForChild(...) or b:WaitForChild(...)" не работала как fallback,
+-- а обращение ReplicatedStorage.Remotes падало, если папки Remotes нет.
+local function waitForRemote(name, timeout)
+    timeout = timeout or 5
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    local found = remotes and remotes:WaitForChild(name, timeout)
+    if not found then
+        found = ReplicatedStorage:WaitForChild(name, timeout)
+    end
+    if not found then
+        warn(("[Dig to Earth's CORE!] RemoteEvent '%s' не найден"):format(name))
+    end
+    return found
+end
+
+local SpinPrizeEvent = waitForRemote("SpinPrizeEvent")
+local DigEvent = waitForRemote("DigEvent")
 
 -- Таблица для хранения активных циклов
 local activeLoops = {}
@@ -18,13 +35,19 @@ local function createPrizeToggle(tab, text, prizeId)
         Default = false,
         Callback = function(value)
             if value then
+                if not SpinPrizeEvent then
+                    warn("[Dig to Earth's CORE!] SpinPrizeEvent не найден — переключатель не работает")
+                    return
+                end
+                -- не запускаем второй цикл, если он уже активен
+                if activeLoops[prizeId] then return end
                 activeLoops[prizeId] = true
-                coroutine.wrap(function()
+                task.spawn(function()
                     while activeLoops[prizeId] do
                         SpinPrizeEvent:FireServer(prizeId)
                         task.wait(0.1)
                     end
-                end)()
+                end)
             else
                 activeLoops[prizeId] = false
             end
@@ -45,12 +68,14 @@ createPrizeToggle(Tab1, "Collect 100 Gems", 1)
 
 -- Улучшенная функция для поиска RemoteEvent
 local function findRemoteEvent(possibleNames)
-    local locations = {
-        ReplicatedStorage,
-        ReplicatedStorage.Remotes,
-        game:GetService("Workspace"),
-        game:GetService("Players").LocalPlayer
-    }
+    -- FindFirstChild вместо прямого обращения: папки Remotes может не быть
+    local locations = { ReplicatedStorage }
+    local remotesFolder = ReplicatedStorage:FindFirstChild("Remotes")
+    if remotesFolder then
+        table.insert(locations, remotesFolder)
+    end
+    table.insert(locations, game:GetService("Workspace"))
+    table.insert(locations, game:GetService("Players").LocalPlayer)
     
     for _, location in ipairs(locations) do
         for _, name in ipairs(possibleNames) do
@@ -90,26 +115,32 @@ Tab2:AddToggle({
     Default = false,
     Callback = function(value)
         if value then
+            if activeLoops.pets then return end
             -- Пытаемся найти событие для получения питомцев
             local PetEvent = getAllPets()
             
             if PetEvent then
                 activeLoops.pets = true
-                coroutine.wrap(function()
+                task.spawn(function()
                     while activeLoops.pets do
                         -- Отправляем запрос на получение питомца
                         PetEvent:FireServer()
                         
                         -- Также пытаемся получить питомцев через другие возможные методы
-                        SpinPrizeEvent:FireServer(4) -- Dominus (часто дает питомцев)
-                        SpinPrizeEvent:FireServer(5) -- 250 Gems (может использоваться для покупки питомцев)
+                        if SpinPrizeEvent then
+                            SpinPrizeEvent:FireServer(4) -- Dominus (часто дает питомцев)
+                            SpinPrizeEvent:FireServer(5) -- 250 Gems (может использоваться для покупки питомцев)
+                        end
                         
                         task.wait(0.2)
                     end
-                end)()
+                end)
             else
-                Library:Notify("Ошибка", "Не найден RemoteEvent для питомцев!", 5)
-                Tab2:GetToggles()[1]:SetValue(false) -- Отключаем переключатель
+                -- Notify/GetToggles есть не во всех версиях библиотеки — защищаемся pcall
+                pcall(function()
+                    Library:Notify("Ошибка", "Не найден RemoteEvent для питомцев!", 5)
+                end)
+                warn("[Dig to Earth's CORE!] Не найден RemoteEvent для питомцев")
             end
         else
             activeLoops.pets = false
@@ -123,13 +154,18 @@ Tab2:AddToggle({
     Default = false,
     Callback = function(value)
         if value then
+            if not DigEvent then
+                warn("[Dig to Earth's CORE!] DigEvent не найден — переключатель не работает")
+                return
+            end
+            if activeLoops.money then return end
             activeLoops.money = true
-            coroutine.wrap(function()
+            task.spawn(function()
                 while activeLoops.money do
                     DigEvent:FireServer("hello")
                     task.wait(0.1)
                 end
-            end)()
+            end)
         else
             activeLoops.money = false
         end
@@ -142,8 +178,13 @@ Tab2:AddToggle({
     Default = false,
     Callback = function(value)
         if value then
+            if not SpinPrizeEvent then
+                warn("[Dig to Earth's CORE!] SpinPrizeEvent не найден — переключатель не работает")
+                return
+            end
+            if activeLoops.resources then return end
             activeLoops.resources = true
-            coroutine.wrap(function()
+            task.spawn(function()
                 while activeLoops.resources do
                     -- Быстрое получение различных ресурсов
                     SpinPrizeEvent:FireServer(9) -- 75 Gems
@@ -155,7 +196,7 @@ Tab2:AddToggle({
                     
                     task.wait(0.3)
                 end
-            end)()
+            end)
         else
             activeLoops.resources = false
         end
